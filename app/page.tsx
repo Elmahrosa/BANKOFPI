@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import {
@@ -16,16 +16,123 @@ import {
   TrendingUp,
   Menu,
   Bell,
+  Zap,
+  AlertCircle,
+  CheckCircle,
 } from "lucide-react"
 import Link from "next/link"
 
 export default function HomePage() {
   const [showBalance, setShowBalance] = useState(true)
+  const [paymentStatus, setPaymentStatus] = useState("")
+  const [isPiBrowser, setIsPiBrowser] = useState(false)
+  const [isCheckingSdk, setIsCheckingSdk] = useState(true)
+
+  useEffect(() => {
+    const checkPiSdk = () => {
+      if (typeof window !== "undefined") {
+        const hasPi = !!(window as any).Pi
+        setIsPiBrowser(hasPi)
+        setIsCheckingSdk(false)
+        console.log("[v0] Pi SDK available:", hasPi)
+      }
+    }
+
+    checkPiSdk()
+
+    const timer = setTimeout(checkPiSdk, 1000)
+    return () => clearTimeout(timer)
+  }, [])
+
+  const handleTestPayment = async () => {
+    try {
+      setPaymentStatus("Checking Pi SDK...")
+
+      if (typeof window === "undefined" || !(window as any).Pi) {
+        setPaymentStatus("ERROR: Pi SDK not loaded. Please open in Pi Browser")
+        return
+      }
+
+      setPaymentStatus("Initializing payment...")
+      const Pi = (window as any).Pi
+
+      await Pi.init({ version: "2.0", sandbox: true })
+      const scopes = ["payments"]
+      const authResult = await Pi.authenticate(scopes, onIncompletePaymentFound)
+      console.log("[v0] Auth result:", authResult)
+
+      setPaymentStatus("Creating payment...")
+
+      const payment = await Pi.createPayment(
+        {
+          amount: 1,
+          memo: "Test payment from BANKOFPI",
+          metadata: { productId: "test_payment_001" },
+        },
+        {
+          onReadyForServerApproval: async (paymentId: string) => {
+            console.log("[v0] Payment ready:", paymentId)
+            setPaymentStatus(`Approving payment ${paymentId}...`)
+
+            const response = await fetch("/api/payments/approve", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ paymentId }),
+            })
+
+            const data = await response.json()
+            console.log("[v0] Approval response:", data)
+
+            if (!response.ok) {
+              throw new Error(data.error || "Failed to approve payment")
+            }
+          },
+          onReadyForServerCompletion: async (paymentId: string, txid: string) => {
+            console.log("[v0] Payment completed:", paymentId, txid)
+            setPaymentStatus(`Completing payment ${paymentId}...`)
+
+            const response = await fetch("/api/payments/complete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ paymentId, txid }),
+            })
+
+            const data = await response.json()
+            console.log("[v0] Completion response:", data)
+
+            if (!response.ok) {
+              throw new Error(data.error || "Failed to complete payment")
+            }
+
+            setPaymentStatus("SUCCESS! Payment completed: " + txid)
+          },
+          onCancel: (paymentId: string) => {
+            console.log("[v0] Payment cancelled:", paymentId)
+            setPaymentStatus("Payment cancelled by user")
+          },
+          onError: (error: Error, payment?: any) => {
+            console.error("[v0] Payment error:", error, payment)
+            setPaymentStatus("ERROR: " + error.message)
+          },
+        },
+      )
+
+      console.log("[v0] Payment created:", payment)
+    } catch (error: any) {
+      console.error("[v0] Test payment error:", error)
+      setPaymentStatus("ERROR: " + error.message)
+    }
+  }
+
+  function onIncompletePaymentFound(payment: any) {
+    console.log("[v0] Incomplete payment found:", payment)
+    return payment.paymentId
+  }
 
   const quickActions = [
     { icon: Send, label: "Send", href: "#send" },
     { icon: ArrowDownLeft, label: "Receive", href: "#receive" },
-    { icon: CreditCard, label: "Pay", href: "#pay" },
+    { icon: CreditCard, label: "Pay", href: "/pay" },
     { icon: TrendingUp, label: "Invest", href: "#invest" },
   ]
 
@@ -57,6 +164,60 @@ export default function HomePage() {
       </header>
 
       <main className="container mx-auto px-4 py-6 max-w-md pb-24">
+        {!isCheckingSdk && (
+          <Card className={`mb-4 ${isPiBrowser ? "bg-chart-2/10 border-chart-2" : "bg-chart-5/10 border-chart-5"}`}>
+            <CardContent className="p-4 flex items-start gap-3">
+              {isPiBrowser ? (
+                <CheckCircle className="h-5 w-5 text-chart-2 flex-shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="h-5 w-5 text-chart-5 flex-shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1">
+                <p className={`font-semibold text-sm ${isPiBrowser ? "text-chart-2" : "text-chart-5"}`}>
+                  {isPiBrowser ? "Pi Browser Detected!" : "Not in Pi Browser"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {isPiBrowser
+                    ? "You can now test Pi payments. Make sure your API key is configured."
+                    : "To test Pi payments, please open this app in Pi Browser. Go to Pi app > Mine > Browser and enter: teosegypt.com"}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        <Card
+          className={`mb-6 ${
+            isPiBrowser
+              ? "bg-gradient-to-r from-chart-1 to-chart-2"
+              : "bg-gradient-to-r from-muted-foreground/50 to-muted-foreground/70"
+          } text-white`}
+        >
+          <CardContent className="p-4">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center">
+                <Zap className="h-5 w-5" />
+              </div>
+              <div className="flex-1">
+                <p className="font-bold text-sm">Test Pi Payment</p>
+                <p className="text-xs opacity-90">
+                  {isPiBrowser ? "Click to test 1π transaction" : "Only works in Pi Browser"}
+                </p>
+              </div>
+            </div>
+            <Button
+              onClick={handleTestPayment}
+              disabled={!isPiBrowser}
+              className="w-full bg-white text-chart-1 hover:bg-white/90 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+              size="sm"
+            >
+              <Zap className="h-4 w-4 mr-2" />
+              Test Payment (1π)
+            </Button>
+            {paymentStatus && <div className="mt-3 p-2 bg-white/20 rounded text-xs break-words">{paymentStatus}</div>}
+          </CardContent>
+        </Card>
+
         {/* Balance Card */}
         <Card className="bg-primary text-primary-foreground mb-6 overflow-hidden relative">
           <div className="absolute top-0 right-0 w-32 h-32 bg-primary-foreground/10 rounded-full -mr-16 -mt-16"></div>
